@@ -21,7 +21,7 @@ const errorHandler = require('./middleware/errorHandler');
 const AppError = require('./utils/AppError');
 
 // Import routes
-const routes = require('./routes');
+const routes = require('./api');
 
 const app = express();
 const server = http.createServer(app);
