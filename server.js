@@ -42,7 +42,7 @@ app.use(helmet());
 const allowedOrigins = [
   'http://localhost:5000',
   'http://localhost:5500',
-  'https://your-actual-netlify-app.netlify.app' // Update this after deployment
+  'https://https://fanciful-duckanoo-7072a6.netlify.app' // Update this after deployment
 ];
 
 app.use(cors({
