@@ -10,6 +10,23 @@ const http = require('http');
 const path = require('path');
 require('dotenv').config();
 
+// ==================== IMPORT MODELS ====================
+const User = require('./models/User');
+const Account = require('./models/Account');
+const Transaction = require('./models/Transaction');
+const Card = require('./models/Card');
+const Loan = require('./models/Loan');
+const Referral = require('./models/Referral');
+const Investment = require('./models/Investment');
+const Staking = require('./models/Staking');
+const NFT = require('./models/NFT');
+const BusinessAccount = require('./models/BusinessAccount');
+const Invoice = require('./models/Invoice');
+const Reward = require('./models/Reward');
+const Device = require('./models/Device');
+const ActivityLog = require('./models/ActivityLog');
+
+// ==================== CREATE EXPRESS APP FIRST ====================
 const app = express();
 const server = http.createServer(app);
 const io = socketio(server, {
@@ -20,7 +37,7 @@ const io = socketio(server, {
   }
 });
 
-// Middleware
+// ==================== MIDDLEWARE ====================
 app.use(helmet());
 const allowedOrigins = [
   'http://localhost:5000',
@@ -31,8 +48,8 @@ const allowedOrigins = [
 app.use(cors({
   origin: function(origin, callback) {
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-       callback(null,true);
-    } else{
+       callback(null, true);
+    } else {
        callback(new Error('Not allowed by CORS'));
     }
   },
@@ -41,10 +58,12 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname)));
+
 // Serve index.html for root route
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -52,245 +71,34 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// MongoDB Connection
+// ==================== IMPORT ROUTES ====================
+const authRoutes = require('./api/auth');
+const userRoutes = require('./api/users');
+const cardRoutes = require('./api/cards');
+const cryptoRoutes = require('./api/crypto');
+const investmentRoutes = require('./api/investments');
+const loanRoutes = require('./api/loans');
+const mobileMoneyRoutes = require('./api/mobileMoney');
+const adminRoutes = require('./api/admin');
+const bankingRoutes = require('./api/banking');
+
+// ==================== USE ROUTES ====================
+app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/users', userRoutes);
+app.use('/api/v1/cards', cardRoutes);
+app.use('/api/v1/crypto', cryptoRoutes);
+app.use('/api/v1/investments', investmentRoutes);
+app.use('/api/v1/loans', loanRoutes);
+app.use('/api/v1/mobile-money', mobileMoneyRoutes);
+app.use('/api/v1/admin', adminRoutes);
+app.use('/api/v1/banking', bankingRoutes);
+
+// ==================== MongoDB Connection ====================
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/quantumpay', {
   useNewUrlParser: true,
   useUnifiedTopology: true
 }).then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.error('MongoDB connection error:', err));
-
-// ==================== MODELS ====================
-
-// User Model
-const UserSchema = new mongoose.Schema({
-  firstName: { type: String, required: true },
-  lastName: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  phone: { type: String, required: true },
-  country: { type: String, required: true },
-  password: { type: String, required: true },
-  isVerified: { type: Boolean, default: false },
-  kycLevel: { type: Number, default: 1 },
-  twoFactorEnabled: { type: Boolean, default: false },
-  twoFactorSecret: String,
-  createdAt: { type: Date, default: Date.now },
-  lastLogin: Date,
-  profileImage: String,
-  referralCode: { type: String, unique: true },
-  referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  settings: {
-    defaultCurrency: { type: String, default: 'USD' },
-    language: { type: String, default: 'en' },
-    timezone: { type: String, default: 'UTC' },
-    notifications: {
-      email: { type: Boolean, default: true },
-      sms: { type: Boolean, default: true },
-      push: { type: Boolean, default: true }
-    }
-  }
-});
-
-// Account Model
-const AccountSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  currency: { type: String, required: true },
-  balance: { type: Number, default: 0 },
-  accountNumber: { type: String, unique: true },
-  accountType: { type: String, enum: ['savings', 'checking', 'business'], default: 'savings' },
-  isActive: { type: Boolean, default: true },
-  createdAt: { type: Date, default: Date.now }
-});
-
-// Transaction Model
-const TransactionSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['send', 'receive', 'exchange', 'deposit', 'withdrawal', 'payment', 'refund'], required: true },
-  amount: { type: Number, required: true },
-  currency: { type: String, required: true },
-  fromAddress: String,
-  toAddress: String,
-  fromAccount: { type: mongoose.Schema.Types.ObjectId, ref: 'Account' },
-  toAccount: { type: mongoose.Schema.Types.ObjectId, ref: 'Account' },
-  status: { type: String, enum: ['pending', 'completed', 'failed', 'processing'], default: 'pending' },
-  description: String,
-  reference: { type: String, unique: true },
-  fee: Number,
-  exchangeRate: Number,
-  createdAt: { type: Date, default: Date.now },
-  completedAt: Date
-});
-
-// Card Model
-const CardSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'Account' },
-  cardNumber: { type: String, unique: true },
-  cardHolderName: String,
-  expiryMonth: String,
-  expiryYear: String,
-  cvv: String,
-  type: { type: String, enum: ['virtual', 'physical'], default: 'virtual' },
-  brand: { type: String, enum: ['visa', 'mastercard'], default: 'visa' },
-  status: { type: String, enum: ['active', 'blocked', 'expired'], default: 'active' },
-  limit: Number,
-  spent: { type: Number, default: 0 },
-  createdAt: { type: Date, default: Date.now }
-});
-
-// Loan Model
-const LoanSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  amount: Number,
-  currency: String,
-  remainingAmount: Number,
-  interestRate: Number,
-  term: Number,
-  status: { type: String, enum: ['pending', 'approved', 'active', 'completed', 'defaulted'], default: 'pending' },
-  nextPaymentDate: Date,
-  payments: [{
-    amount: Number,
-    date: Date,
-    status: String
-  }],
-  createdAt: { type: Date, default: Date.now }
-});
-
-// Referral Model
-const ReferralSchema = new mongoose.Schema({
-  referrerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  referredId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  email: String,
-  status: { type: String, enum: ['pending', 'verified', 'paid'], default: 'pending' },
-  earnedAmount: { type: Number, default: 0 },
-  createdAt: { type: Date, default: Date.now },
-  verifiedAt: Date
-});
-
-// Investment Model
-const InvestmentSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  type: { type: String, enum: ['stock', 'etf', 'bond', 'commodity', 'realestate', 'crypto'], required: true },
-  symbol: String,
-  name: String,
-  amount: Number,
-  quantity: Number,
-  purchasePrice: Number,
-  currentPrice: Number,
-  currency: String,
-  status: { type: String, enum: ['active', 'sold', 'pending'], default: 'active' },
-  createdAt: { type: Date, default: Date.now }
-});
-
-// Staking Model
-const StakingSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  currency: { type: String, enum: ['BTC', 'ETH', 'BNB', 'SOL', 'ADA', 'DOT'], required: true },
-  amount: Number,
-  apy: Number,
-  lockPeriod: Number,
-  startDate: Date,
-  endDate: Date,
-  rewards: Number,
-  status: { type: String, enum: ['active', 'completed', 'cancelled'], default: 'active' }
-});
-
-// NFT Model
-const NFTSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  tokenId: String,
-  name: String,
-  collection: String,
-  image: String,
-  purchasePrice: Number,
-  currentPrice: Number,
-  currency: String,
-  status: { type: String, enum: ['owned', 'listed', 'sold'], default: 'owned' }
-});
-
-// Business Account Model
-const BusinessAccountSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  businessName: String,
-  businessType: String,
-  registrationNumber: String,
-  taxId: String,
-  address: String,
-  verified: { type: Boolean, default: false },
-  balance: { type: Number, default: 0 },
-  currency: { type: String, default: 'USD' }
-});
-
-// Invoice Model
-const InvoiceSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  invoiceNumber: { type: String, unique: true },
-  clientName: String,
-  clientEmail: String,
-  clientAddress: String,
-  items: [{
-    description: String,
-    quantity: Number,
-    price: Number,
-    total: Number
-  }],
-  subtotal: Number,
-  tax: Number,
-  total: Number,
-  currency: String,
-  status: { type: String, enum: ['draft', 'sent', 'paid', 'overdue'], default: 'draft' },
-  dueDate: Date,
-  createdAt: { type: Date, default: Date.now },
-  paidAt: Date
-});
-
-// Reward Model
-const RewardSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  points: { type: Number, default: 0 },
-  cashback: { type: Number, default: 0 },
-  tier: { type: String, enum: ['bronze', 'silver', 'gold', 'platinum'], default: 'bronze' },
-  history: [{
-    action: String,
-    points: Number,
-    date: Date
-  }]
-});
-
-// Device Model
-const DeviceSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  deviceId: String,
-  deviceName: String,
-  platform: String,
-  lastActive: Date,
-  isCurrent: { type: Boolean, default: false }
-});
-
-// Activity Log Model
-const ActivityLogSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  action: String,
-  details: String,
-  ip: String,
-  userAgent: String,
-  timestamp: { type: Date, default: Date.now }
-});
-
-// Create models
-const User = mongoose.model('User', UserSchema);
-const Account = mongoose.model('Account', AccountSchema);
-const Transaction = mongoose.model('Transaction', TransactionSchema);
-const Card = mongoose.model('Card', CardSchema);
-const Loan = mongoose.model('Loan', LoanSchema);
-const Referral = mongoose.model('Referral', ReferralSchema);
-const Investment = mongoose.model('Investment', InvestmentSchema);
-const Staking = mongoose.model('Staking', StakingSchema);
-const NFT = mongoose.model('NFT', NFTSchema);
-const BusinessAccount = mongoose.model('BusinessAccount', BusinessAccountSchema);
-const Invoice = mongoose.model('Invoice', InvoiceSchema);
-const Reward = mongoose.model('Reward', RewardSchema);
-const Device = mongoose.model('Device', DeviceSchema);
-const ActivityLog = mongoose.model('ActivityLog', ActivityLogSchema);
 
 // ==================== MIDDLEWARE ====================
 
@@ -460,7 +268,7 @@ app.post('/api/v1/auth/login', async (req, res) => {
   }
 });
 
-// Add this after the login route (around line 200)
+// Add this after the login route
 app.post('/api/v1/auth/verify', authenticate, async (req, res) => {
   try {
     res.json({ 
@@ -471,6 +279,7 @@ app.post('/api/v1/auth/verify', authenticate, async (req, res) => {
     res.status(500).json({ status: 'error', message: 'Verification failed' });
   }
 });
+
 // Add this after verify route
 app.post('/api/v1/auth/forgot-password', async (req, res) => {
   try {
@@ -490,6 +299,7 @@ app.post('/api/v1/auth/forgot-password', async (req, res) => {
     res.status(500).json({ status: 'error', message: 'Failed to process request' });
   }
 });
+
 // ==================== USER ROUTES ====================
 
 app.get('/api/v1/users/me', authenticate, async (req, res) => {
@@ -1250,7 +1060,7 @@ app.use((err, req, res, next) => {
 // ==================== START SERVER ====================
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📱 Dashboard: http://localhost:${PORT}/dashboard.html`);
 });

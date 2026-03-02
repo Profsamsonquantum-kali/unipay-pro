@@ -1,11 +1,17 @@
 // sms/twilio.js
-const twilio = require('twilio');
+let client = null;
 
-// Initialize Twilio client with environment variables
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+// Only initialize Twilio if credentials are provided
+if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+  const twilio = require('twilio');
+  client = twilio(
+    process.env.TWILIO_ACCOUNT_SID,
+    process.env.TWILIO_AUTH_TOKEN
+  );
+  console.log('✅ Twilio initialized');
+} else {
+  console.log('⚠️ Twilio credentials not found - SMS disabled');
+}
 
 /**
  * Send SMS message
@@ -14,10 +20,21 @@ const client = twilio(
  * @returns {Promise} - Twilio message object
  */
 const sendSMS = async (to, message) => {
+  // If Twilio is not configured, just mock it
+  if (!client) {
+    console.log(`📱 [MOCK] SMS to ${to}: ${message}`);
+    return { sid: 'mock_sid', status: 'delivered' };
+  }
+
   try {
     // Validate inputs
     if (!to || !message) {
       throw new Error('Phone number and message are required');
+    }
+
+    // Check if phone number is configured
+    if (!process.env.TWILIO_PHONE_NUMBER) {
+      throw new Error('TWILIO_PHONE_NUMBER is not set in environment variables');
     }
 
     // Send message
@@ -27,10 +44,15 @@ const sendSMS = async (to, message) => {
       from: process.env.TWILIO_PHONE_NUMBER
     });
 
-    console.log(`SMS sent to ${to}: ${result.sid}`);
+    console.log(`✅ SMS sent to ${to}: ${result.sid}`);
     return result;
   } catch (error) {
-    console.error('SMS sending failed:', error);
+    console.error('❌ SMS sending failed:', error.message);
+    // Don't throw error in mock mode - just log it
+    if (!client) {
+      console.log('📱 [MOCK] SMS would have failed but continuing');
+      return { sid: 'mock_failed', status: 'mock' };
+    }
     throw error;
   }
 };
@@ -58,6 +80,7 @@ const sendTransactionAlert = async (to, amount, type) => {
   return sendSMS(to, message);
 };
 
+// Export all functions at the END (after they're defined)
 module.exports = {
   sendSMS,
   sendVerificationCode,

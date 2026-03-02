@@ -4,7 +4,7 @@ const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const auth = require('../middleware/auth');
 const axios = require('axios');
-const twilio = require('../../sms/twilio');
+const twilio = require('../sms/twilio');
 const { v4: uuidv4 } = require('uuid');
 
 // ==================== M-PESA (Kenya, Tanzania) - REAL ====================

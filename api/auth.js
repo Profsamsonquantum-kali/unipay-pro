@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
-const twilio = require('../../sms/twilio');
+const twilio = require('../sms/twilio');
 const { v4: uuidv4 } = require('uuid');
 
 // Register
