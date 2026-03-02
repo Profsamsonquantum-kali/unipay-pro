@@ -2,16 +2,16 @@ const express = require('express');
 const router = express.Router();
 
 // Import all route modules
-const authRoutes = require('./api/auth');
-const userRoutes = require('./api/users');
-const paymentRoutes = require('./api/payments');
-const cryptoRoutes = require('./api/crypto');
-const bankRoutes = require('./api/banks');
-const cardRoutes = require('./api/cards');
-const loanRoutes = require('./api/loans');
-const investmentRoutes = require('./api/investments');
-const adminRoutes = require('./api/admin');
-
+const authRoutes = require('./auth');
+const userRoutes = require('./users');
+const paymentRoutes = require('./payments');
+const cryptoRoutes = require('./crypto');
+const bankRoutes = require('./banks');
+const cardRoutes = require('./cards');
+const loanRoutes = require('./loans');
+const investmentRoutes = require('./investments');
+const adminRoutes = require('./admin');
+const mobilemoneyRoutes = require('./mobileMoney');
 // Health check
 router.get('/health', (req, res) => {
     res.status(200).json({
