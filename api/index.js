@@ -1,23 +1,11 @@
 const express = require('express');
-const router = express.Router();
-
-// Import all route modules
-const authRoutes = require('./auth');
-const userRoutes = require('./users');
-const paymentRoutes = require('./payments');
-const cryptoRoutes = require('./crypto');
-const bankRoutes = require('./banks');
-const cardRoutes = require('./cards');
-const loanRoutes = require('./loans');
-const investmentRoutes = require('./investments');
-const adminRoutes = require('./admin');
-const mobilemoneyRoutes = require('./mobileMoney');
 const fs = require('fs');
 const path = require('path');
 
+const router = express.Router();
 const routes = {};
 
-// Read all files in the current directory
+// Dynamically load all route files
 fs.readdirSync(__dirname).forEach(file => {
   // Skip index.js itself, non-js files, and directories
   if (file === 'index.js' || !file.endsWith('.js')) return;
@@ -41,15 +29,17 @@ router.get('/health', (req, res) => {
     });
 });
 
-// Mount routes
-router.use('/auth', authRoutes);
-router.use('/users', userRoutes);
-router.use('/payments', paymentRoutes);
-router.use('/crypto', cryptoRoutes);
-router.use('/banks', bankRoutes);
-router.use('/cards', cardRoutes);
-router.use('/loans', loanRoutes);
-router.use('/investments', investmentRoutes);
-router.use('/admin', adminRoutes);
+// Mount routes dynamically
+Object.keys(routes).forEach(routeName => {
+  // Use the route name as the path (e.g., /auth, /users, etc.)
+  router.use(`/${routeName}`, routes[routeName]);
+  console.log(`🔄 Mounted route: /${routeName}`);
+});
+
+// Special case for mobileMoney (if you want it as /mobile-money instead of /mobileMoney)
+if (routes.mobileMoney) {
+  router.use('/mobile-money', routes.mobileMoney);
+  console.log(`🔄 Mounted route: /mobile-money`);
+}
 
 module.exports = router;
