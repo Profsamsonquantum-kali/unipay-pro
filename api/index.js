@@ -12,6 +12,25 @@ const loanRoutes = require('./loans');
 const investmentRoutes = require('./investments');
 const adminRoutes = require('./admin');
 const mobilemoneyRoutes = require('./mobileMoney');
+const fs = require('fs');
+const path = require('path');
+
+const routes = {};
+
+// Read all files in the current directory
+fs.readdirSync(__dirname).forEach(file => {
+  // Skip index.js itself, non-js files, and directories
+  if (file === 'index.js' || !file.endsWith('.js')) return;
+  
+  const routeName = file.replace('.js', '');
+  try {
+    routes[routeName] = require(`./${routeName}`);
+    console.log(`✅ Loaded route: ${routeName}`);
+  } catch (error) {
+    console.log(`❌ Failed to load ${routeName}: ${error.message}`);
+  }
+});
+
 // Health check
 router.get('/health', (req, res) => {
     res.status(200).json({
