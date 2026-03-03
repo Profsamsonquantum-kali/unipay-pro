@@ -9,6 +9,13 @@ const { v4: uuidv4 } = require('uuid');
 router.post('/register', async (req, res) => {
     try {
         const { firstName, lastName, email, phone, country, password } = req.body;
+        // Validate required fields
+        if (!firstName || !lastName || !email || !phone || !country || !password) {
+            return res.status(400).json({ 
+                status: 'error', 
+                message: 'All fields are required' 
+            });
+        }
 
         // Check if user exists
         const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
@@ -17,7 +24,8 @@ router.post('/register', async (req, res) => {
         }
 
         // Generate referral code
-        const referralCode = 'QTP' + uuidv4().substring(0, 8).toUpperCase();
+        const referralCode = 'QTP' + Math.random().toString(36).substring(2, 10).toUpperCase();
+
 
         // Create user
         const user = new User({
@@ -55,8 +63,8 @@ router.post('/register', async (req, res) => {
             { expiresIn: '7d' }
         );
 
-        res.json({
-            success: true,
+        res.status(201).json({
+            status: 'success',
             token,
             user: {
                 id: user._id,
@@ -78,15 +86,27 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
     try {
         const { email, password } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ 
+                status: 'error', 
+                message: 'Email and password are required' 
+            });
+        }
 
-        const user = await User.findOne({ email });
+        const user = await User.findOne({ email }).select('+password');
         if (!user) {
-            return res.status(401).json({ error: 'Invalid credentials' });
+            return res.status(401).json({ 
+                status: 'error', 
+                message: 'Invalid credentials' 
+            });
         }
 
         const isValid = await user.correctPassword(password, user.password);
         if (!isValid) {
-            return res.status(401).json({ error: 'Invalid credentials' });
+            return res.status(401).json({ 
+                status: 'error', 
+                message: 'Invalid credentials' 
+            });
         }
 
         user.lastLogin = new Date();
@@ -95,25 +115,50 @@ router.post('/login', async (req, res) => {
         const token = jwt.sign(
             { id: user._id },
             process.env.JWT_SECRET,
-            { expiresIn: '7d' }
+            { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
         );
+        const userData = user.toObject();
+        delete userData.password;
+        delete userData.__v;
 
         res.json({
-            success: true,
+            status: 'success',
             token,
-            user: {
-                id: user._id,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                email: user.email,
-                phone: user.phone,
-                country: user.country
+            data: { user: userData }
+        });
+
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ 
+            status: 'error', 
+            message: process.env.NODE_ENV === 'production' 
+                ? 'Login failed' 
+                : error.message 
+        });
+    }
+});
+        // IMPORTANT: Match frontend expected format
+        res.json({
+            status: 'success',
+            token,
+            data: {
+                user: {
+                    id: user._id,
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                    email: user.email,
+                    phone: user.phone,
+                    country: user.country
+                }
             }
         });
 
     } catch (error) {
         console.error('Login error:', error);
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ 
+            status: 'error', 
+            message: error.message 
+        });
     }
 });
 
@@ -123,18 +168,18 @@ router.get('/verify', async (req, res) => {
         const token = req.headers.authorization?.split(' ')[1];
         
         if (!token) {
-            return res.status(401).json({ valid: false });
+            return res.status(401).json({status: 'error', message: 'No token provided'});
         }
 
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         const user = await User.findById(decoded.id).select('-password');
 
         if (!user) {
-            return res.status(401).json({ valid: false });
+            return res.status(401).json({status: 'error', message: 'User not found' });
         }
 
         res.json({
-            valid: true,
+            status: 'success',
             user: {
                 id: user._id,
                 firstName: user.firstName,
@@ -146,7 +191,8 @@ router.get('/verify', async (req, res) => {
         });
 
     } catch (error) {
-        res.status(401).json({ valid: false });
+        console.error('Verify error:', error);
+        res.status(401).json({status: 'error', message: 'Invalid tokes});
     }
 });
 

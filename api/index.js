@@ -1,45 +1,36 @@
+// api/index.js
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
 
 const router = express.Router();
-const routes = {};
 
-// Dynamically load all route files
-fs.readdirSync(__dirname).forEach(file => {
-  // Skip index.js itself, non-js files, and directories
-  if (file === 'index.js' || !file.endsWith('.js')) return;
-  
-  const routeName = file.replace('.js', '');
-  try {
-    routes[routeName] = require(`./${routeName}`);
-    console.log(`✅ Loaded route: ${routeName}`);
-  } catch (error) {
-    console.log(`❌ Failed to load ${routeName}: ${error.message}`);
-  }
-});
-
-// Health check
+// Add a direct health check
 router.get('/health', (req, res) => {
-    res.status(200).json({
+    res.json({
         status: 'success',
-        message: 'API is running',
-        timestamp: new Date().toISOString(),
-        version: '20.0.0'
+        message: 'API v1 is running',
+        timestamp: new Date().toISOString()
     });
 });
 
-// Mount routes dynamically
-Object.keys(routes).forEach(routeName => {
-  // Use the route name as the path (e.g., /auth, /users, etc.)
-  router.use(`/${routeName}`, routes[routeName]);
-  console.log(`🔄 Mounted route: /${routeName}`);
+// Log all loaded routes
+console.log('\n📂 Loading API routes from:', __dirname);
+
+// Load all route files
+fs.readdirSync(__dirname).forEach(file => {
+    if (file === 'index.js' || !file.endsWith('.js')) return;
+    
+    const routeName = file.replace('.js', '');
+    try {
+        const routeModule = require(`./${file}`);
+        router.use(`/${routeName}`, routeModule);
+        console.log(`✅ Loaded route: /${routeName}`);
+    } catch (error) {
+        console.log(`❌ Failed to load ${routeName}: ${error.message}`);
+    }
 });
 
-// Special case for mobileMoney (if you want it as /mobile-money instead of /mobileMoney)
-if (routes.mobileMoney) {
-  router.use('/mobile-money', routes.mobileMoney);
-  console.log(`🔄 Mounted route: /mobile-money`);
-}
+console.log('✅ API routes loaded successfully\n');
 
 module.exports = router;

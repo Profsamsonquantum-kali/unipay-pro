@@ -17,36 +17,38 @@ require('dotenv').config();
 // Import configs
 const connectDB = require('./config/database');
 const { initializeSocket } = require('./config/socket');
-const errorHandler = require('./middleware/errorHandler');
-const AppError = require('./utils/AppError');
-
-// Import routes
-const routes = require('./api');
 
 const app = express();
 const server = http.createServer(app);
+
+// ==================== SOCKET.IO SETUP ====================
 const io = socketIO(server, {
     cors: {
         origin: process.env.CLIENT_URL || '*',
         credentials: true
-    }
+    },
+    transports: ['websocket', 'polling']
 });
 
 // ==================== DATABASE CONNECTION ====================
-connectDB();
+connectDB().catch(err => {
+    console.error('❌ Failed to connect to database:', err);
+    process.exit(1);
+});
 
-// ==================== SOCKET.IO ====================
+// ==================== SOCKET.IO INITIALIZATION ====================
 initializeSocket(io);
 
-// ==================== GLOBAL MIDDLEWARE ====================
+// ==================== TRUST PROXY ====================
+app.set('trust proxy', 1);
 
-// Security HTTP headers
+// ==================== SECURITY MIDDLEWARE ====================
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net", "https://cdn.socket.io"],
+            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net", "https://cdn.socket.io", "https://s3.tradingview.com"],
             fontSrc: ["'self'", "https://fonts.gstatic.com"],
             imgSrc: ["'self'", "data:", "https://via.placeholder.com"],
             connectSrc: ["'self'", "wss://", "https://api.stripe.com", "https://api.coingecko.com"]
@@ -54,103 +56,234 @@ app.use(helmet({
     }
 }));
 
-// CORS
+// ==================== CORS CONFIGURATION ====================
+const allowedOrigins = [
+    'http://localhost:5000',
+    'http://localhost:5500',
+    'http://localhost:3000',
+    'http://127.0.0.1:5000',
+    'http://127.0.0.1:5500',
+    'http://127.0.0.1:3000',
+    'https://fanciful-duckanoo-7072a6.netlify.app',
+    'https://your-netlify-site.netlify.app'
+];
+
+if (process.env.CLIENT_URL) {
+    allowedOrigins.push(process.env.CLIENT_URL);
+}
+
 app.use(cors({
-    origin: process.env.CLIENT_URL || '*',
+    origin: function(origin, callback) {
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+            callback(null, true);
+        } else {
+            console.warn('🚫 CORS blocked origin:', origin);
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true,
     optionsSuccessStatus: 200
 }));
 
-// Body parser
+console.log('🔒 CORS allowed origins:', allowedOrigins);
+
+// ==================== BODY PARSER ====================
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
-// Data sanitization against NoSQL query injection
+// ==================== SECURITY SANITIZATION ====================
 app.use(mongoSanitize());
-
-// Data sanitization against XSS
 app.use(xss());
-
-// Prevent parameter pollution
 app.use(hpp());
 
-// Compression
+// ==================== COMPRESSION ====================
 app.use(compression());
 
-// Logging
+// ==================== LOGGING ====================
 if (process.env.NODE_ENV === 'development') {
     app.use(morgan('dev'));
 } else {
     app.use(morgan('combined'));
 }
 
-// Rate limiting
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
-    message: 'Too many requests from this IP, please try again later.'
+// ==================== RATE LIMITING ====================
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: {
+        status: 'error',
+        message: 'Too many requests from this IP, please try again later.'
+    }
 });
-app.use('/api', limiter);
 
-// Static files
-app.use(express.static(path.join(__dirname, '../frontend/public')));
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: {
+        status: 'error',
+        message: 'Too many authentication attempts, please try again later.'
+    }
+});
 
-// ==================== ROUTES ====================
-app.use('/api/v1', routes);
+app.use('/api/', apiLimiter);
+app.use('/api/v1/auth/', authLimiter);
 
-// Health check
-app.get('/health', (req, res) => {
+// ==================== IMPORT ROUTES ====================
+const routes = require('./api');
+
+// ==================== ROUTES - IN CORRECT ORDER ====================
+
+// 1. HEALTH CHECK - MUST BE FIRST
+app.get('/api/health', (req, res) => {
+    const dbState = mongoose.connection.readyState;
+    const dbStatus = {
+        0: 'disconnected',
+        1: 'connected',
+        2: 'connecting',
+        3: 'disconnecting'
+    };
+    
     res.status(200).json({
         status: 'success',
         message: 'QuantumPay API is running',
         timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV,
-        version: '20.0.0'
+        environment: process.env.NODE_ENV || 'development',
+        version: '20.0.0',
+        database: {
+            status: dbStatus[dbState] || 'unknown',
+            state: dbState,
+            host: mongoose.connection.host || 'localhost',
+            name: mongoose.connection.name || 'quantumpay'
+        },
+        uptime: process.uptime()
     });
 });
 
-// Serve frontend for all non-API routes
+// 2. API ROUTES
+app.use('/api/v1', routes);
+
+// 3. TEST ROUTE (direct in app.js for verification)
+app.get('/api/test', (req, res) => {
+    res.json({ 
+        status: 'success', 
+        message: 'App.js test route working',
+        timestamp: new Date().toISOString()
+    });
+});
+
+// 4. STATIC FILES
+app.use(express.static(path.join(__dirname)));
+
+// 5. HTML ROUTES
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+app.get('/dashboard', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dashboard.html'));
+});
+
+app.get('/dashboard.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dashboard.html'));
+});
+
+// 6. 404 HANDLER FOR API (catch any unmatched /api/* routes)
+app.use('/api/*', (req, res) => {
+    res.status(404).json({
+        status: 'error',
+        message: `API endpoint not found: ${req.method} ${req.originalUrl}`
+    });
+});
+
+// 7. CATCH-ALL FOR FRONTEND (LAST)
 app.get('*', (req, res) => {
-    if (req.url.startsWith('/api')) {
-        return next(new AppError('API endpoint not found', 404));
-    }
-    res.sendFile(path.join(__dirname, '../frontend/public/index.html'));
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 // ==================== ERROR HANDLING ====================
-app.all('*', (req, res, next) => {
-    next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
+app.use((err, req, res, next) => {
+    console.error('❌ Error:', err);
+    console.error('❌ Stack:', err.stack);
+    
+    const message = process.env.NODE_ENV === 'production' 
+        ? 'Internal server error' 
+        : err.message;
+    
+    const status = err.statusCode || 500;
+    
+    if (req.originalUrl.startsWith('/api')) {
+        return res.status(status).json({
+            status: 'error',
+            message: message
+        });
+    }
+    
+    res.status(status).send(`
+        <html>
+            <head><title>Error</title></head>
+            <body>
+                <h1>${status} Error</h1>
+                <p>${message}</p>
+                <a href="/">Go Home</a>
+            </body>
+        </html>
+    `);
 });
-
-app.use(errorHandler);
 
 // ==================== START SERVER ====================
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log('\n' + '='.repeat(70));
-    console.log('💰 QUANTUMPAY V20 ULTIMATE PRO');
+    console.log('💰 QUANTUMPAY V20 ULTIMATE PRO BACKEND');
     console.log('='.repeat(70));
     console.log(`📍 Server:       http://localhost:${PORT}`);
     console.log(`📍 API:          http://localhost:${PORT}/api/v1`);
+    console.log(`📍 Health:       http://localhost:${PORT}/api/health`);
+    console.log(`📍 Test:         http://localhost:${PORT}/api/test`);
     console.log(`📍 Dashboard:    http://localhost:${PORT}/dashboard.html`);
     console.log(`📍 Environment:  ${process.env.NODE_ENV || 'development'}`);
-    console.log(`📍 Database:     ${mongoose.connection.readyState === 1 ? '✅ CONNECTED' : '❌ DISCONNECTED'}`);
+    
+    const dbState = mongoose.connection.readyState;
+    const dbStatus = dbState === 1 ? '✅ CONNECTED' : '❌ DISCONNECTED';
+    console.log(`📍 Database:     ${dbStatus}`);
     console.log('='.repeat(70) + '\n');
 });
 
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err) => {
-    console.log('UNHANDLED REJECTION! 💥 Shutting down...');
-    console.log(err.name, err.message);
-    server.close(() => {
-        process.exit(1);
+// ==================== GRACEFUL SHUTDOWN ====================
+const gracefulShutdown = (signal) => {
+    console.log(`\n${signal} received, closing connections...`);
+    
+    io.close(() => {
+        console.log('🔌 WebSocket server closed');
+        server.close(() => {
+            console.log('🌐 HTTP server closed');
+            mongoose.connection.close(false, () => {
+                console.log('🗄️  Database connection closed');
+                console.log('👋 Server shutdown complete');
+                process.exit(0);
+            });
+        });
     });
+    
+    setTimeout(() => {
+        console.error('⚠️ Could not close connections in time, forcefully shutting down');
+        process.exit(1);
+    }, 10000);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+process.on('unhandledRejection', (err) => {
+    console.log('❌ UNHANDLED REJECTION!');
+    console.log(err.name, err.message);
 });
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (err) => {
-    console.log('UNCAUGHT EXCEPTION! 💥 Shutting down...');
+    console.log('❌ UNCAUGHT EXCEPTION!');
     console.log(err.name, err.message);
-    process.exit(1);
 });
+
+module.exports = { app, server, io };

@@ -1,3 +1,36 @@
-.env
+# Dependencies
 node_modules/
+package-lock.json
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory
+coverage/
+.nyc_output/
+
+# Build outputs
+dist/
+build/
+
+# Misc
+.vscode/
+.idea/
+*.swp
+*.swo
