@@ -29,20 +29,279 @@ const ActivityLog = require('./models/ActivityLog');
 // ==================== CREATE EXPRESS APP FIRST ====================
 const app = express();
 const server = http.createServer(app);
+
+// ==================== JWT CONFIGURATION ====================
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+const MAX_TOKEN_SIZE = 2048; // 2KB max token size
+
+// ==================== SECURITY MONITOR ====================
+class SecurityMonitor {
+  constructor() {
+    this.suspiciousActivities = new Map();
+    this.blockedIPs = new Set();
+    this.maxActivitiesPerHour = 10;
+  }
+
+  logSuspiciousActivity(ip, reason, details) {
+    if (!this.suspiciousActivities.has(ip)) {
+      this.suspiciousActivities.set(ip, []);
+    }
+    
+    this.suspiciousActivities.get(ip).push({
+      timestamp: Date.now(),
+      reason,
+      details
+    });
+
+    // Clean old activities (older than 1 hour)
+    const oneHourAgo = Date.now() - 3600000;
+    const recentActivities = this.suspiciousActivities.get(ip)
+      .filter(a => a.timestamp > oneHourAgo);
+
+    if (recentActivities.length > this.maxActivitiesPerHour) {
+      this.blockedIPs.add(ip);
+      console.warn(`🚫 IP ${ip} blocked due to excessive suspicious activity`);
+    }
+
+    console.warn(`⚠️ Suspicious activity from ${ip}:`, { reason, details });
+  }
+
+  checkToken(token, ip) {
+    // Check for malformed tokens
+    if (!token) return true;
+
+    if (token.length > MAX_TOKEN_SIZE) {
+      this.logSuspiciousActivity(ip, 'TOKEN_TOO_LARGE', { size: token.length });
+      return false;
+    }
+
+    // Check for repetitive patterns (potential attack)
+    if (/(.{20,})\1{3,}/.test(token)) {
+      this.logSuspiciousActivity(ip, 'REPETITIVE_TOKEN_PATTERN', { 
+        pattern: token.substring(0, 100) 
+      });
+      return false;
+    }
+
+    // Check JWT structure
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      this.logSuspiciousActivity(ip, 'INVALID_TOKEN_STRUCTURE', { parts: parts.length });
+      return false;
+    }
+
+    // Verify each part is base64url encoded
+    try {
+      parts.forEach(part => {
+        if (!/^[A-Za-z0-9_-]+$/.test(part)) {
+          throw new Error('Invalid character in token part');
+        }
+      });
+      
+      // Try to decode payload (just check if valid base64)
+      const payload = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString());
+      
+      // Check for suspicious payload
+      if (payload.iss && payload.iss.length > 500) {
+        this.logSuspiciousActivity(ip, 'SUSPICIOUS_ISSUER', { issuerLength: payload.iss.length });
+        return false;
+      }
+      
+    } catch (error) {
+      this.logSuspiciousActivity(ip, 'INVALID_TOKEN_ENCODING', { error: error.message });
+      return false;
+    }
+
+    return true;
+  }
+
+  isBlocked(ip) {
+    return this.blockedIPs.has(ip);
+  }
+
+  // Clean up old blocks (call this periodically)
+  cleanupBlocks() {
+    // For simplicity, we'll keep blocks for 24 hours
+    // In production, you'd want to persist this
+    setInterval(() => {
+      this.blockedIPs.clear();
+      this.suspiciousActivities.clear();
+      console.log('🧹 Security monitor cache cleared');
+    }, 24 * 60 * 60 * 1000);
+  }
+}
+
+// Initialize security monitor
+const securityMonitor = new SecurityMonitor();
+securityMonitor.cleanupBlocks();
+
+// ==================== SOCKET.IO SETUP WITH AUTHENTICATION ====================
 const io = socketio(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
     credentials: true
+  },
+  transports: ['websocket', 'polling'],
+  maxHttpBufferSize: 1e6, // 1MB max message size
+  pingTimeout: 60000, // 60 seconds
+  pingInterval: 25000, // 25 seconds
+  allowEIO3: true
+});
+
+// Socket.io middleware for authentication
+io.use((socket, next) => {
+  const clientIp = socket.handshake.address;
+  
+  // Check if IP is blocked
+  if (securityMonitor.isBlocked(clientIp)) {
+    console.warn(`🚫 Blocked connection attempt from blocked IP: ${clientIp}`);
+    return next(new Error('Access denied'));
+  }
+
+  const token = socket.handshake.auth.token || socket.handshake.query.token;
+
+  // Validate token format
+  if (!securityMonitor.checkToken(token, clientIp)) {
+    return next(new Error('Invalid token format'));
+  }
+
+  if (!token) {
+    // Allow unauthenticated connections for public data
+    socket.user = null;
+    return next();
+  }
+
+  try {
+    // Verify the token properly
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    // Check for suspicious payload
+    if (decoded.iss && decoded.iss.length > 500) {
+      securityMonitor.logSuspiciousActivity(clientIp, 'SUSPICIOUS_ISSUER_PAYLOAD', { 
+        issuerLength: decoded.iss.length 
+      });
+      return next(new Error('Invalid token payload'));
+    }
+
+    socket.user = decoded;
+    socket.userId = decoded.userId;
+    next();
+  } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return next(new Error('Token expired'));
+    }
+    if (error.name === 'JsonWebTokenError') {
+      securityMonitor.logSuspiciousActivity(clientIp, 'INVALID_TOKEN_SIGNATURE', { 
+        error: error.message 
+      });
+      return next(new Error('Invalid token signature'));
+    }
+    securityMonitor.logSuspiciousActivity(clientIp, 'TOKEN_VERIFICATION_FAILED', { 
+      error: error.message 
+    });
+    return next(new Error('Authentication failed'));
   }
 });
 
+// Socket.io connection handler with rate limiting
+io.on('connection', (socket) => {
+  const clientIp = socket.handshake.address;
+  console.log(`🔌 Client connected: ${socket.id} from ${clientIp}`);
+
+  // Rate limiting per socket
+  socket.messageCount = 0;
+  socket.messageResetTime = Date.now() + 60000; // Reset every minute
+
+  // Message rate limiting middleware
+  socket.use(([event, ...args], next) => {
+    const now = Date.now();
+    
+    if (now > socket.messageResetTime) {
+      socket.messageCount = 0;
+      socket.messageResetTime = now + 60000;
+    }
+    
+    if (socket.messageCount > 100) { // Max 100 messages per minute
+      securityMonitor.logSuspiciousActivity(clientIp, 'RATE_LIMIT_EXCEEDED', { 
+        messageCount: socket.messageCount 
+      });
+      return next(new Error('Rate limit exceeded'));
+    }
+    
+    socket.messageCount++;
+    next();
+  });
+
+  // Handle authentication event
+  socket.on('authenticate', (token) => {
+    try {
+      if (!securityMonitor.checkToken(token, clientIp)) {
+        socket.emit('authenticated', { success: false, error: 'Invalid token format' });
+        return;
+      }
+
+      const decoded = jwt.verify(token, JWT_SECRET);
+      socket.join(`user-${decoded.userId}`);
+      socket.userId = decoded.userId;
+      socket.emit('authenticated', { success: true });
+      
+      console.log(`✅ Socket ${socket.id} authenticated as user ${decoded.userId}`);
+    } catch (error) {
+      securityMonitor.logSuspiciousActivity(clientIp, 'AUTHENTICATION_FAILED', { 
+        error: error.message 
+      });
+      socket.emit('authenticated', { success: false, error: error.message });
+    }
+  });
+
+  // Price update interval with error handling
+  const priceInterval = setInterval(() => {
+    try {
+      const markets = ['BTC', 'ETH', 'BNB', 'SOL'].map(symbol => ({
+        symbol: `${symbol}/USD`,
+        price: 50000 + Math.random() * 2000,
+        change: (Math.random() - 0.5) * 5
+      }));
+      socket.emit('price-update', markets);
+    } catch (error) {
+      console.error('Price update error:', error);
+    }
+  }, 5000);
+
+  // Handle disconnection
+  socket.on('disconnect', (reason) => {
+    clearInterval(priceInterval);
+    console.log(`🔌 Client disconnected: ${socket.id}, reason: ${reason}`);
+  });
+
+  // Handle errors
+  socket.on('error', (error) => {
+    console.error(`❌ Socket error for ${socket.id}:`, error);
+    securityMonitor.logSuspiciousActivity(clientIp, 'SOCKET_ERROR', { 
+      error: error.message 
+    });
+  });
+});
+
 // ==================== MIDDLEWARE ====================
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+}));
+
 const allowedOrigins = [
   'http://localhost:5000',
   'http://localhost:5500',
-  'https://https://fanciful-duckanoo-7072a6.netlify.app' // Update this after deployment
+  'https://fanciful-duckanoo-7072a6.netlify.app',
+  'http://localhost:3000'
 ];
 
 app.use(cors({
@@ -55,21 +314,49 @@ app.use(cors({
   },
   credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+
+// Request size limiting
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 app.use(express.static(path.join(__dirname)));
+
+// IP blocking middleware
+app.use((req, res, next) => {
+  const clientIp = req.ip || req.connection.remoteAddress;
+  
+  if (securityMonitor.isBlocked(clientIp)) {
+    console.warn(`🚫 Blocked request from blocked IP: ${clientIp}`);
+    return res.status(403).json({ 
+      status: 'error', 
+      message: 'Access denied' 
+    });
+  }
+  
+  next();
+});
 
 // Serve index.html for root route
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100
+// Rate limiting for API routes
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: { status: 'error', message: 'Too many requests, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
-app.use('/api/', limiter);
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // stricter limit for auth routes
+  message: { status: 'error', message: 'Too many authentication attempts, please try again later.' },
+});
+
+app.use('/api/', apiLimiter);
+app.use('/api/v1/auth/', authLimiter);
 
 // ==================== IMPORT ROUTES ====================
 const authRoutes = require('./api/auth');
@@ -100,16 +387,59 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/quantumpa
 }).then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-// ==================== MIDDLEWARE ====================
+// ==================== TOKEN REFRESH ENDPOINT ====================
+app.post('/api/v1/auth/refresh-token', async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    
+    if (!refreshToken) {
+      return res.status(401).json({ status: 'error', message: 'Refresh token required' });
+    }
 
+    // Verify refresh token (implement your refresh token logic)
+    // This is a simplified example - in production, use refresh tokens stored in database
+    try {
+      const decoded = jwt.verify(refreshToken, JWT_SECRET + '-refresh');
+      
+      // Generate new access token
+      const newToken = jwt.sign(
+        { userId: decoded.userId, email: decoded.email },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      res.json({ 
+        status: 'success',
+        token: newToken,
+        expiresIn: 604800 // 7 days in seconds
+      });
+      
+    } catch (error) {
+      return res.status(401).json({ status: 'error', message: 'Invalid refresh token' });
+    }
+    
+  } catch (error) {
+    console.error('Token refresh error:', error);
+    res.status(500).json({ status: 'error', message: 'Token refresh failed' });
+  }
+});
+
+// ==================== MIDDLEWARE ====================
 const authenticate = async (req, res, next) => {
   try {
+    const clientIp = req.ip || req.connection.remoteAddress;
     const token = req.headers.authorization?.split(' ')[1];
+    
     if (!token) {
       return res.status(401).json({ status: 'error', message: 'No token provided' });
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+    // Validate token format
+    if (!securityMonitor.checkToken(token, clientIp)) {
+      return res.status(401).json({ status: 'error', message: 'Invalid token format' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
     const user = await User.findById(decoded.userId);
     
     if (!user) {
@@ -120,12 +450,17 @@ const authenticate = async (req, res, next) => {
     req.userId = user._id;
     next();
   } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ status: 'error', message: 'Token expired' });
+    }
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({ status: 'error', message: 'Invalid token signature' });
+    }
     return res.status(401).json({ status: 'error', message: 'Invalid token' });
   }
 };
 
 // ==================== UTILITY FUNCTIONS ====================
-
 const generateAccountNumber = () => {
   return 'ACC' + Date.now() + Math.random().toString(36).substring(2, 10).toUpperCase();
 };
@@ -1021,40 +1356,39 @@ app.get('/api/v1/stats/portfolio', authenticate, async (req, res) => {
   }
 });
 
-// ==================== WEBSOCKET ====================
-
-io.on('connection', (socket) => {
-  console.log('Client connected');
-
-  socket.on('authenticate', (token) => {
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-      socket.join(`user-${decoded.userId}`);
-      socket.emit('authenticated', { success: true });
-    } catch (error) {
-      socket.emit('authenticated', { success: false });
-    }
-  });
-
-  const interval = setInterval(() => {
-    const markets = ['BTC', 'ETH', 'BNB', 'SOL'].map(symbol => ({
-      symbol: `${symbol}/USD`,
-      price: 50000 + Math.random() * 2000,
-      change: (Math.random() - 0.5) * 5
-    }));
-    socket.emit('price-update', markets);
-  }, 5000);
-
-  socket.on('disconnect', () => {
-    clearInterval(interval);
+// ==================== HEALTH CHECK ENDPOINT ====================
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: Date.now(),
+    connections: io.engine?.clientsCount || 0,
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
   });
 });
 
 // ==================== ERROR HANDLING ====================
 
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ status: 'error', message: 'Something went wrong!' });
+  console.error('❌ Server error:', err.stack);
+  
+  // Log suspicious errors
+  if (err.message && err.message.includes('token')) {
+    securityMonitor.logSuspiciousActivity(req.ip, 'ERROR_TOKEN_ISSUE', { 
+      error: err.message 
+    });
+  }
+  
+  res.status(500).json({ 
+    status: 'error', 
+    message: process.env.NODE_ENV === 'production' 
+      ? 'Something went wrong!' 
+      : err.message 
+  });
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ status: 'error', message: 'Route not found' });
 });
 
 // ==================== START SERVER ====================
@@ -1063,4 +1397,31 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📱 Dashboard: http://localhost:${PORT}/dashboard.html`);
+  console.log(`🔒 Security monitor active`);
+  console.log(`🌐 Allowed origins:`, allowedOrigins);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, closing connections...');
+  io.close(() => {
+    server.close(() => {
+      mongoose.connection.close(false, () => {
+        console.log('Server closed');
+        process.exit(0);
+      });
+    });
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, closing connections...');
+  io.close(() => {
+    server.close(() => {
+      mongoose.connection.close(false, () => {
+        console.log('Server closed');
+        process.exit(0);
+      });
+    });
+  });
 });
