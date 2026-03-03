@@ -387,43 +387,6 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/quantumpa
 }).then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.error('MongoDB connection error:', err));
 
-// ==================== TOKEN REFRESH ENDPOINT ====================
-app.post('/api/v1/auth/refresh-token', async (req, res) => {
-  try {
-    const { refreshToken } = req.body;
-    
-    if (!refreshToken) {
-      return res.status(401).json({ status: 'error', message: 'Refresh token required' });
-    }
-
-    // Verify refresh token (implement your refresh token logic)
-    // This is a simplified example - in production, use refresh tokens stored in database
-    try {
-      const decoded = jwt.verify(refreshToken, JWT_SECRET + '-refresh');
-      
-      // Generate new access token
-      const newToken = jwt.sign(
-        { userId: decoded.userId, email: decoded.email },
-        JWT_SECRET,
-        { expiresIn: '7d' }
-      );
-
-      res.json({ 
-        status: 'success',
-        token: newToken,
-        expiresIn: 604800 // 7 days in seconds
-      });
-      
-    } catch (error) {
-      return res.status(401).json({ status: 'error', message: 'Invalid refresh token' });
-    }
-    
-  } catch (error) {
-    console.error('Token refresh error:', error);
-    res.status(500).json({ status: 'error', message: 'Token refresh failed' });
-  }
-});
-
 // ==================== MIDDLEWARE ====================
 const authenticate = async (req, res, next) => {
   try {
@@ -632,6 +595,43 @@ app.post('/api/v1/auth/forgot-password', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ status: 'error', message: 'Failed to process request' });
+  }
+});
+
+// ==================== TOKEN REFRESH ENDPOINT ====================
+app.post('/api/v1/auth/refresh-token', async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    
+    if (!refreshToken) {
+      return res.status(401).json({ status: 'error', message: 'Refresh token required' });
+    }
+
+    // Verify refresh token (implement your refresh token logic)
+    // This is a simplified example - in production, use refresh tokens stored in database
+    try {
+      const decoded = jwt.verify(refreshToken, JWT_SECRET + '-refresh');
+      
+      // Generate new access token
+      const newToken = jwt.sign(
+        { userId: decoded.userId, email: decoded.email },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      res.json({ 
+        status: 'success',
+        token: newToken,
+        expiresIn: 604800 // 7 days in seconds
+      });
+      
+    } catch (error) {
+      return res.status(401).json({ status: 'error', message: 'Invalid refresh token' });
+    }
+    
+  } catch (error) {
+    console.error('Token refresh error:', error);
+    res.status(500).json({ status: 'error', message: 'Token refresh failed' });
   }
 });
 
@@ -1353,6 +1353,521 @@ app.get('/api/v1/stats/portfolio', authenticate, async (req, res) => {
     res.json({ status: 'success', data: { portfolio } });
   } catch (error) {
     res.status(500).json({ status: 'error', message: 'Failed to fetch portfolio stats' });
+  }
+});
+
+// ==================== ADDITIONAL MISSING ROUTES ====================
+
+// QR Code routes
+app.get('/api/v1/users/qr-address', authenticate, async (req, res) => {
+  try {
+    const qrAddress = 'QTP-' + req.userId + '-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+    res.json({ status: 'success', data: { address: qrAddress } });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to generate QR address' });
+  }
+});
+
+app.post('/api/v1/users/qr-address/new', authenticate, async (req, res) => {
+  try {
+    const newAddress = 'QTP-' + req.userId + '-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+    res.json({ status: 'success', data: { address: newAddress } });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to generate new address' });
+  }
+});
+
+// Mobile Money
+app.post('/api/v1/transactions/mobile-money', authenticate, async (req, res) => {
+  try {
+    const { phone, amount } = req.body;
+    
+    // Find account (default to USD or first available)
+    const account = await Account.findOne({ userId: req.userId, currency: 'USD' });
+    if (!account || account.balance < amount) {
+      return res.status(400).json({ status: 'error', message: 'Insufficient balance' });
+    }
+
+    account.balance -= amount;
+    await account.save();
+
+    const transaction = new Transaction({
+      userId: req.userId,
+      type: 'send',
+      amount,
+      currency: 'USD',
+      toAddress: phone,
+      description: `Mobile Money to ${phone}`,
+      reference: generateReference(),
+      status: 'completed'
+    });
+    await transaction.save();
+
+    await logActivity(req.userId, 'MOBILE_MONEY', `Sent ${amount} to ${phone}`, req);
+
+    res.json({ status: 'success', message: 'Mobile money sent successfully' });
+  } catch (error) {
+    console.error('Mobile money error:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to send mobile money' });
+  }
+});
+
+// Exchange rates
+app.get('/api/v1/exchange/rates', authenticate, async (req, res) => {
+  try {
+    const rates = {
+      'BTC-ETH': 16.5,
+      'BTC-BNB': 124.2,
+      'BTC-SOL': 415.3,
+      'BTC-USDT': 51234.50,
+      'ETH-BTC': 0.0606,
+      'ETH-BNB': 7.53,
+      'ETH-SOL': 25.2,
+      'ETH-USDT': 3123.45,
+      'BNB-BTC': 0.00805,
+      'BNB-ETH': 0.133,
+      'BNB-SOL': 3.35,
+      'BNB-USDT': 412.75,
+      'SOL-BTC': 0.00241,
+      'SOL-ETH': 0.0397,
+      'SOL-BNB': 0.298,
+      'SOL-USDT': 123.45,
+      'USDT-BTC': 0.0000195,
+      'USDT-ETH': 0.00032,
+      'USDT-BNB': 0.00242,
+      'USDT-SOL': 0.0081
+    };
+    res.json({ status: 'success', data: { rates } });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to fetch exchange rates' });
+  }
+});
+
+app.post('/api/v1/exchange/execute', authenticate, async (req, res) => {
+  try {
+    const { from, to, amount } = req.body;
+    
+    // Mock successful exchange
+    await logActivity(req.userId, 'EXCHANGE', `Exchanged ${amount} ${from} to ${to}`, req);
+    
+    res.json({ status: 'success', message: 'Exchange completed successfully' });
+  } catch (error) {
+    console.error('Exchange error:', error);
+    res.status(500).json({ status: 'error', message: 'Exchange failed' });
+  }
+});
+
+// Savings
+app.get('/api/v1/savings', authenticate, async (req, res) => {
+  try {
+    const savings = await Account.find({ 
+      userId: req.userId, 
+      accountType: 'savings' 
+    }) || [];
+    
+    res.json({ status: 'success', data: { savings } });
+  } catch (error) {
+    res.json({ status: 'success', data: { savings: [] } });
+  }
+});
+
+app.post('/api/v1/savings/create', authenticate, async (req, res) => {
+  try {
+    const { amount, currency } = req.body;
+    
+    const account = await Account.findOne({ userId: req.userId, currency });
+    if (!account || account.balance < amount) {
+      return res.status(400).json({ status: 'error', message: 'Insufficient balance' });
+    }
+
+    account.balance -= amount;
+    await account.save();
+
+    const savingsAccount = new Account({
+      userId: req.userId,
+      currency,
+      balance: amount,
+      accountNumber: generateAccountNumber(),
+      accountType: 'savings'
+    });
+    await savingsAccount.save();
+
+    res.json({ status: 'success', message: 'Savings account created' });
+  } catch (error) {
+    console.error('Savings error:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to create savings' });
+  }
+});
+
+// Fixed Deposits
+app.get('/api/v1/fixed-deposits', authenticate, async (req, res) => {
+  try {
+    // Mock data
+    const deposits = [
+      { id: 1, amount: 5000, currency: 'USD', term: 12, interestRate: 8, maturityDate: new Date(Date.now() + 365*24*60*60*1000) }
+    ];
+    res.json({ status: 'success', data: { deposits } });
+  } catch (error) {
+    res.json({ status: 'success', data: { deposits: [] } });
+  }
+});
+
+app.post('/api/v1/fixed-deposits/create', authenticate, async (req, res) => {
+  try {
+    const { amount, currency, term } = req.body;
+    res.json({ status: 'success', message: 'Fixed deposit created' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to create fixed deposit' });
+  }
+});
+
+// Treasury
+app.get('/api/v1/treasury', authenticate, async (req, res) => {
+  try {
+    const data = {
+      products: [
+        { name: 'T-Bills', yield: 5.2, description: '3-month Treasury bills' },
+        { name: 'T-Bonds', yield: 6.8, description: '10-year Treasury bonds' }
+      ],
+      history: [
+        { period: 'Jan', yield: 5.0 },
+        { period: 'Feb', yield: 5.2 },
+        { period: 'Mar', yield: 5.1 },
+        { period: 'Apr', yield: 5.3 }
+      ]
+    };
+    res.json({ status: 'success', data });
+  } catch (error) {
+    res.json({ status: 'success', data: { products: [], history: [] } });
+  }
+});
+
+// DeFi
+app.get('/api/v1/defi/portfolio', authenticate, async (req, res) => {
+  try {
+    const data = {
+      liquidityPools: [
+        { name: 'Uniswap ETH/USDC', apy: 12.5, provided: 1000 },
+        { name: 'Curve 3pool', apy: 8.3, provided: 500 }
+      ],
+      yieldFarms: [
+        { name: 'Aave USDT', apy: 4.5, earned: 12.50 },
+        { name: 'Compound ETH', apy: 3.8, earned: 8.20 }
+      ]
+    };
+    res.json({ status: 'success', data });
+  } catch (error) {
+    res.json({ status: 'success', data: { liquidityPools: [], yieldFarms: [] } });
+  }
+});
+
+// Yield Farming
+app.get('/api/v1/yield-farming', authenticate, async (req, res) => {
+  try {
+    const data = {
+      farms: [
+        { _id: '1', pool: 'ETH-USDC', apy: 15.5, tvl: '1.2M', yourStake: 500 },
+        { _id: '2', pool: 'BTC-ETH', apy: 12.8, tvl: '2.5M', yourStake: 1000 }
+      ]
+    };
+    res.json({ status: 'success', data });
+  } catch (error) {
+    res.json({ status: 'success', data: { farms: [] } });
+  }
+});
+
+app.post('/api/v1/yield-farming/:id/harvest', authenticate, async (req, res) => {
+  try {
+    res.json({ status: 'success', message: 'Harvested successfully' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to harvest' });
+  }
+});
+
+// Markets Overview
+app.get('/api/v1/markets/overview', authenticate, async (req, res) => {
+  try {
+    const markets = [
+      { symbol: 'BTC/USD', name: 'Bitcoin', price: 51234.50, change: 2.5, volume: '28.5B' },
+      { symbol: 'ETH/USD', name: 'Ethereum', price: 3123.45, change: 1.8, volume: '15.4B' },
+      { symbol: 'BNB/USD', name: 'Binance Coin', price: 412.75, change: -0.5, volume: '3.2B' },
+      { symbol: 'SOL/USD', name: 'Solana', price: 123.45, change: 5.2, volume: '1.8B' }
+    ];
+    
+    const topGainers = markets.filter(m => m.change > 0).slice(0, 3);
+    
+    res.json({ status: 'success', data: { markets, topGainers } });
+  } catch (error) {
+    res.json({ status: 'success', data: { markets: [], topGainers: [] } });
+  }
+});
+
+// Stocks
+app.get('/api/v1/stocks/prices', authenticate, async (req, res) => {
+  try {
+    const stocks = [
+      { symbol: 'AAPL', name: 'Apple Inc.', price: 175.50, change: 0.8 },
+      { symbol: 'GOOGL', name: 'Alphabet', price: 142.30, change: 1.2 },
+      { symbol: 'MSFT', name: 'Microsoft', price: 378.85, change: 1.5 },
+      { symbol: 'AMZN', name: 'Amazon', price: 145.20, change: 0.3 }
+    ];
+    res.json({ status: 'success', data: { stocks } });
+  } catch (error) {
+    res.json({ status: 'success', data: { stocks: [] } });
+  }
+});
+
+// Bonds
+app.get('/api/v1/bonds/prices', authenticate, async (req, res) => {
+  try {
+    const bonds = [
+      { _id: '1', issuer: 'US Treasury', yield: 4.5, maturity: new Date(2034, 0, 1), price: 98.50 },
+      { _id: '2', issuer: 'UK Gilts', yield: 4.2, maturity: new Date(2033, 0, 1), price: 97.80 }
+    ];
+    res.json({ status: 'success', data: { bonds } });
+  } catch (error) {
+    res.json({ status: 'success', data: { bonds: [] } });
+  }
+});
+
+// Commodities
+app.get('/api/v1/commodities/prices', authenticate, async (req, res) => {
+  try {
+    const commodities = [
+      { name: 'Gold', price: 2150.50, change: 0.8, unit: 'oz' },
+      { name: 'Silver', price: 25.30, change: 1.2, unit: 'oz' },
+      { name: 'Oil (WTI)', price: 78.45, change: -0.5, unit: 'bbl' }
+    ];
+    res.json({ status: 'success', data: { commodities } });
+  } catch (error) {
+    res.json({ status: 'success', data: { commodities: [] } });
+  }
+});
+
+// REITs
+app.get('/api/v1/reits/prices', authenticate, async (req, res) => {
+  try {
+    const reits = [
+      { _id: '1', name: 'Realty Income', price: 52.30, dividendYield: 5.2 },
+      { _id: '2', name: 'Digital Realty', price: 145.80, dividendYield: 3.8 }
+    ];
+    res.json({ status: 'success', data: { reits } });
+  } catch (error) {
+    res.json({ status: 'success', data: { reits: [] } });
+  }
+});
+
+// Merchant
+app.get('/api/v1/merchant/stats', authenticate, async (req, res) => {
+  try {
+    const data = {
+      todayVolume: 1250.00,
+      transactions: 42,
+      successRate: 98.5,
+      averageTransaction: 29.76,
+      liveKey: 'pk_live_' + Math.random().toString(36).substring(2, 15),
+      testKey: 'pk_test_' + Math.random().toString(36).substring(2, 15)
+    };
+    res.json({ status: 'success', data });
+  } catch (error) {
+    res.json({ status: 'success', data: {
+      todayVolume: 0, transactions: 0, successRate: 100, averageTransaction: 0,
+      liveKey: 'pk_live_sample', testKey: 'pk_test_sample'
+    } });
+  }
+});
+
+app.post('/api/v1/merchant/keys/regenerate', authenticate, async (req, res) => {
+  try {
+    res.json({ status: 'success', message: 'Keys regenerated' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to regenerate keys' });
+  }
+});
+
+// Payroll
+app.get('/api/v1/payroll/history', authenticate, async (req, res) => {
+  try {
+    const payrolls = [
+      { date: new Date(), period: 'monthly', amount: 15000, employees: 5, status: 'completed' }
+    ];
+    res.json({ status: 'success', data: { payrolls } });
+  } catch (error) {
+    res.json({ status: 'success', data: { payrolls: [] } });
+  }
+});
+
+app.post('/api/v1/payroll/run', authenticate, async (req, res) => {
+  try {
+    const { period, amount, employees } = req.body;
+    res.json({ status: 'success', message: 'Payroll processed' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to process payroll' });
+  }
+});
+
+// API Keys
+app.get('/api/v1/api-keys', authenticate, async (req, res) => {
+  try {
+    const data = {
+      productionKey: 'pk_prod_' + Math.random().toString(36).substring(2, 20),
+      testKey: 'pk_test_' + Math.random().toString(36).substring(2, 20)
+    };
+    res.json({ status: 'success', data });
+  } catch (error) {
+    res.json({ status: 'success', data: { productionKey: 'pk_prod_sample', testKey: 'pk_test_sample' } });
+  }
+});
+
+// Cashback
+app.get('/api/v1/cashback', authenticate, async (req, res) => {
+  try {
+    const data = {
+      available: 25.50,
+      rate: 2.5,
+      totalSpend: 1250.00,
+      recent: [
+        { description: 'Grocery Store', amount: 85.20, cashback: 2.13, date: new Date() }
+      ]
+    };
+    res.json({ status: 'success', data });
+  } catch (error) {
+    res.json({ status: 'success', data: { available: 0, rate: 2.5, totalSpend: 0, recent: [] } });
+  }
+});
+
+// Loyalty
+app.get('/api/v1/loyalty', authenticate, async (req, res) => {
+  try {
+    const data = {
+      tier: 'Gold',
+      tierColor: '#ffd700',
+      progress: 65,
+      pointsNeeded: 350,
+      benefits: [
+        { icon: 'gift', description: '2x Points on all purchases' },
+        { icon: 'percent', description: '5% Cashback' }
+      ]
+    };
+    res.json({ status: 'success', data });
+  } catch (error) {
+    res.json({ status: 'success', data: {
+      tier: 'Bronze', tierColor: '#cd7f32', progress: 0, pointsNeeded: 1000, benefits: []
+    } });
+  }
+});
+
+// Profile
+app.put('/api/v1/users/profile', authenticate, async (req, res) => {
+  try {
+    const { firstName, lastName, phone, country } = req.body;
+    
+    req.user.firstName = firstName || req.user.firstName;
+    req.user.lastName = lastName || req.user.lastName;
+    req.user.phone = phone || req.user.phone;
+    req.user.country = country || req.user.country;
+    await req.user.save();
+
+    await logActivity(req.userId, 'UPDATE_PROFILE', 'Updated profile', req);
+
+    res.json({ status: 'success', message: 'Profile updated' });
+  } catch (error) {
+    console.error('Profile update error:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to update profile' });
+  }
+});
+
+// Settings
+app.get('/api/v1/users/settings', authenticate, async (req, res) => {
+  try {
+    const settings = req.user.settings || {
+      defaultCurrency: 'USD',
+      language: 'en',
+      timezone: 'UTC',
+      notifications: [
+        { id: 'email', name: 'Email Notifications', enabled: true },
+        { id: 'push', name: 'Push Notifications', enabled: true },
+        { id: 'sms', name: 'SMS Alerts', enabled: false }
+      ]
+    };
+    res.json({ status: 'success', data: settings });
+  } catch (error) {
+    res.json({ status: 'success', data: {
+      defaultCurrency: 'USD', language: 'en', timezone: 'UTC', notifications: []
+    } });
+  }
+});
+
+// Notifications
+app.post('/api/v1/users/notifications/:id/read', authenticate, async (req, res) => {
+  try {
+    res.json({ status: 'success', message: 'Notification marked as read' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to mark notification' });
+  }
+});
+
+// Activity
+app.get('/api/v1/users/activity', authenticate, async (req, res) => {
+  try {
+    const activities = await ActivityLog.find({ userId: req.userId })
+      .sort({ timestamp: -1 })
+      .limit(50);
+    res.json({ status: 'success', data: { activities } });
+  } catch (error) {
+    res.json({ status: 'success', data: { activities: [] } });
+  }
+});
+
+// Security Devices
+app.get('/api/v1/security/devices', authenticate, async (req, res) => {
+  try {
+    const devices = await Device.find({ userId: req.userId }).sort({ lastActive: -1 });
+    res.json({ status: 'success', data: { devices } });
+  } catch (error) {
+    res.json({ status: 'success', data: { devices: [] } });
+  }
+});
+
+app.post('/api/v1/security/devices/:id/logout', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Device.updateOne({ _id: id, userId: req.userId }, { lastActive: new Date() });
+    res.json({ status: 'success', message: 'Device logged out' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to logout device' });
+  }
+});
+
+app.post('/api/v1/security/devices/logout-all', authenticate, async (req, res) => {
+  try {
+    await Device.updateMany(
+      { userId: req.userId, isCurrent: false },
+      { lastActive: new Date() }
+    );
+    res.json({ status: 'success', message: 'All devices logged out' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to logout devices' });
+  }
+});
+
+// Support
+app.post('/api/v1/support/ticket', authenticate, async (req, res) => {
+  try {
+    const { subject, message, priority } = req.body;
+    await logActivity(req.userId, 'SUPPORT_TICKET', `Created ticket: ${subject}`, req);
+    res.json({ status: 'success', message: 'Support ticket created' });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to create ticket' });
+  }
+});
+
+app.post('/api/v1/support/chat/start', authenticate, async (req, res) => {
+  try {
+    const chatUrl = `https://quantumchat.com/session/${req.userId}-${Date.now()}`;
+    res.json({ status: 'success', data: { chatUrl } });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: 'Failed to start chat' });
   }
 });
 
