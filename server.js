@@ -318,6 +318,8 @@ app.use(cors({
 // Request size limiting
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// Serve static files from the current directory
 app.use(express.static(path.join(__dirname)));
 
 // IP blocking middleware
@@ -335,12 +337,30 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve index.html for root route
+// ==================== HTML PAGE ROUTES ====================
+
+// Root route - serve index.html (login/register page)
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Rate limiting for API routes
+// Dashboard route - serve dashboard.html
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard.html'));
+});
+
+// Also serve dashboard.html directly (for backward compatibility)
+app.get('/dashboard.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard.html'));
+});
+
+// Catch-all for any other HTML pages (optional)
+app.get('*.html', (req, res) => {
+  res.sendFile(path.join(__dirname, req.path));
+});
+
+// ==================== RATE LIMITING ====================
+
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100, // limit each IP to 100 requests per windowMs
@@ -1911,7 +1931,8 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📱 Dashboard: http://localhost:${PORT}/dashboard.html`);
+  console.log(`📝 Login/Register: http://localhost:${PORT}/`);
+  console.log(`📊 Dashboard: http://localhost:${PORT}/dashboard`);
   console.log(`🔒 Security monitor active`);
   console.log(`🌐 Allowed origins:`, allowedOrigins);
 });
