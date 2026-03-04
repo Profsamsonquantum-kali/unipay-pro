@@ -55,19 +55,8 @@ app.use(helmet({
         }
     }
 }));
-// Handle OPTIONS requests for all routes
-app.options('*', (req, res) => {
-    const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin)) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-    }
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.sendStatus(200);
-});
 
-// ==================== CORS CONFIGURATION - COMPLETE FIX ====================
+// ==================== SIMPLIFIED CORS CONFIGURATION ====================
 const allowedOrigins = [
     'http://localhost:5000',
     'http://localhost:5500',
@@ -76,65 +65,32 @@ const allowedOrigins = [
     'http://127.0.0.1:5500',
     'http://127.0.0.1:3000',
     'https://fanciful-duckanoo-7072a6.netlify.app',
-    'https://quantumpay.pages.dev',           // YOUR CLOUDFLARE DOMAIN
-    'https://quantumpay-app.pages.dev',       // ALTERNATIVE CLOUDFLARE DOMAIN
-    'https://quantum-via-pages.dev',          // ANOTHER VARIATION
-    'https://your-netlify-site.netlify.app'
+    'https://quantumpay.pages.dev',
+    'https://quantumpay-app.pages.dev',
+    'https://quantum-via.pages.dev'
 ];
 
-// Allow all origins in development
+// CORS middleware
 app.use(cors({
     origin: function(origin, callback) {
-        // Allow requests with no origin (like mobile apps, curl)
         if (!origin) return callback(null, true);
         if (process.env.NODE_ENV === 'development') {
             return callback(null, true);
-        
-        // Check if origin is allowed
+        }
         if (allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            // Log blocked origins for debugging
             console.log('⚠️ Blocked origin:', origin);
-            callback(new Error('⚠️ Not allowed by CORS'));
-            
-            // FOR TESTING ONLY - REMOVE IN PRODUCTION
-            // TEMPORARILY ALLOW ALL ORIGINS TO TEST
-            callback(null, true);
-            
-            // IN PRODUCTION, USE THIS INSTEAD:
-            // callback(new Error('Not allowed by CORS'));
+            callback(null, true); // TEMPORARY - REMOVE IN PRODUCTION
         }
     },
     credentials: true,
-    optionsSuccessStatus: 200
+    optionsSuccessStatus: 200,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
-// 1. HEALTH CHECK - Make it CORS-friendly
-app.get('/api/health', cors(), (req, res) => {
-    const dbState = mongoose.connection.readyState;
-    const dbStatus = {
-        0: 'disconnected',
-        1: 'connected',
-        2: 'connecting',
-        3: 'disconnecting'
-    };
-    
-    res.status(200).json({
-        status: 'success',
-        message: 'QuantumPay API is running',
-        timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development',
-        version: '20.0.0',
-        database: {
-            status: dbStatus[dbState] || 'unknown',
-            state: dbState,
-            host: mongoose.connection.host || 'localhost',
-            name: mongoose.connection.name || 'quantumpay'
-        },
-        uptime: process.uptime()
-    });
-});
-console.log('🔒 CORS configured to allow:', allowedOrigins);
+
+app.options('*', cors());
 
 // ==================== BODY PARSER ====================
 app.use(express.json({ limit: '10mb' }));
@@ -181,10 +137,10 @@ app.use('/api/v1/auth/', authLimiter);
 // ==================== IMPORT ROUTES ====================
 const routes = require('./api');
 
-// ==================== ROUTES - IN CORRECT ORDER ====================
+// ==================== ROUTES ====================
 
-// 1. HEALTH CHECK - MUST BE FIRST
-app.get('/api/health', (req, res) => {
+// 1. HEALTH CHECK
+app.get('/api/health', cors(), (req, res) => {
     const dbState = mongoose.connection.readyState;
     const dbStatus = {
         0: 'disconnected',
@@ -212,8 +168,8 @@ app.get('/api/health', (req, res) => {
 // 2. API ROUTES
 app.use('/api/v1', routes);
 
-// 3. TEST ROUTE (direct in app.js for verification)
-app.get('/api/test', (req, res) => {
+// 3. TEST ROUTE
+app.get('/api/test', cors(), (req, res) => {
     res.json({ 
         status: 'success', 
         message: 'App.js test route working',
@@ -221,23 +177,34 @@ app.get('/api/test', (req, res) => {
     });
 });
 
-// 4. STATIC FILES
+// ==================== STATIC FILES (CSS, JS, IMAGES) ====================
+// This serves everything in the root directory
 app.use(express.static(path.join(__dirname)));
 
-// 5. HTML ROUTES
+// ==================== HTML ROUTES ====================
+
+// Root route - serves index.html
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    const filePath = path.join(__dirname, 'index.html');
+    console.log('📄 Serving index.html from:', filePath);
+    res.sendFile(filePath);
 });
 
+// Dashboard route - serves dashboard.html
 app.get('/dashboard', (req, res) => {
-    res.sendFile(path.join(__dirname, 'dashboard.html'));
+    const filePath = path.join(__dirname, 'dashboard.html');
+    console.log('📄 Serving dashboard.html from:', filePath);
+    res.sendFile(filePath);
 });
 
+// Also serve dashboard.html directly
 app.get('/dashboard.html', (req, res) => {
-    res.sendFile(path.join(__dirname, 'dashboard.html'));
+    const filePath = path.join(__dirname, 'dashboard.html');
+    console.log('📄 Serving dashboard.html from:', filePath);
+    res.sendFile(filePath);
 });
 
-// 6. 404 HANDLER FOR API (catch any unmatched /api/* routes)
+// ==================== 404 HANDLER ====================
 app.use('/api/*', (req, res) => {
     res.status(404).json({
         status: 'error',
@@ -245,9 +212,13 @@ app.use('/api/*', (req, res) => {
     });
 });
 
-// 7. CATCH-ALL FOR FRONTEND (LAST)
+// ==================== CATCH-ALL FOR FRONTEND ====================
+// This handles any other routes by serving index.html (for SPA behavior)
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    // Don't serve index.html for API routes (already handled above)
+    if (!req.originalUrl.startsWith('/api/')) {
+        res.sendFile(path.join(__dirname, 'index.html'));
+    }
 });
 
 // ==================== ERROR HANDLING ====================
@@ -290,13 +261,25 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`📍 API:          http://localhost:${PORT}/api/v1`);
     console.log(`📍 Health:       http://localhost:${PORT}/api/health`);
     console.log(`📍 Test:         http://localhost:${PORT}/api/test`);
+    console.log(`📍 Index:        http://localhost:${PORT}/`);
+    console.log(`📍 Dashboard:    http://localhost:${PORT}/dashboard`);
     console.log(`📍 Dashboard:    http://localhost:${PORT}/dashboard.html`);
+    console.log(`📍 Static files: http://localhost:${PORT}/[filename]`);
     console.log(`📍 Environment:  ${process.env.NODE_ENV || 'development'}`);
     
     const dbState = mongoose.connection.readyState;
     const dbStatus = dbState === 1 ? '✅ CONNECTED' : '❌ DISCONNECTED';
     console.log(`📍 Database:     ${dbStatus}`);
     console.log('='.repeat(70) + '\n');
+    
+    // List important files
+    const fs = require('fs');
+    const files = ['index.html', 'dashboard.html', 'css/main.css', 'js/quantum-animation.js'];
+    files.forEach(file => {
+        const fullPath = path.join(__dirname, file);
+        const exists = fs.existsSync(fullPath);
+        console.log(`📁 ${file}: ${exists ? '✅ Found' : '❌ Missing'}`);
+    });
 });
 
 // ==================== GRACEFUL SHUTDOWN ====================
