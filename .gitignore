@@ -18,3 +18,5 @@ Thumbs.db
 # Runtime
 dist/
 build/
+node_modules/
+.env
