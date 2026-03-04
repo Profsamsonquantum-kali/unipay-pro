@@ -64,7 +64,7 @@ const allowedOrigins = [
     'http://127.0.0.1:5000',
     'http://127.0.0.1:5500',
     'http://127.0.0.1:3000',
-    'https://fanciful-duckanoo-7072a6.netlify.app',
+    'https://quantumpay-app.pages.dev',
     'https://your-netlify-site.netlify.app'
 ];
 
