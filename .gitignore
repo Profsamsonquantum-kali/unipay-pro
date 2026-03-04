@@ -2,7 +2,7 @@
 node_modules/
 package-lock.json
 
-# Environment files
+# Environment
 .env
 .env.local
 .env.production
@@ -15,22 +15,6 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# Coverage directory
-coverage/
-.nyc_output/
-
-# Build outputs
+# Runtime
 dist/
 build/
-
-# Misc
-.vscode/
-.idea/
-*.swp
-*.swo
