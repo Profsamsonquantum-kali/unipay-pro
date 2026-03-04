@@ -2,13 +2,23 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
-const twilio = require('../sms/twilio');
+const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 
-// Register
+// ==================== TEST ROUTE ====================
+router.get('/test', (req, res) => {
+    res.json({ 
+        status: 'success', 
+        message: 'Auth router is working!',
+        endpoints: ['POST /register', 'POST /login', 'GET /verify', 'POST /forgot-password']
+    });
+});
+
+// ==================== REGISTER ====================
 router.post('/register', async (req, res) => {
     try {
         const { firstName, lastName, email, phone, country, password } = req.body;
+
         // Validate required fields
         if (!firstName || !lastName || !email || !phone || !country || !password) {
             return res.status(400).json({ 
@@ -20,72 +30,86 @@ router.post('/register', async (req, res) => {
         // Check if user exists
         const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
         if (existingUser) {
-            return res.status(400).json({ error: 'User already exists' });
+            return res.status(400).json({ 
+                status: 'error', 
+                message: 'User already exists with this email or phone' 
+            });
         }
 
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
+        
         // Generate referral code
-        const referralCode = 'QTP' + Math.random().toString(36).substring(2, 10).toUpperCase();
+        const referralCode = 'QTP' + uuidv4().substring(0, 8).toUpperCase();
 
-
-        // Create user
+        // Create user with all required fields
         const user = new User({
             firstName,
             lastName,
             email,
             phone,
             country,
-            password,
+            password: hashedPassword,
             referralCode,
             balances: {
-                USD: 100, // Welcome bonus
+                USD: 1000, // Welcome bonus
+                EUR: 0,
+                GBP: 0,
                 KES: 15000,
                 NGN: 150000,
-                ZAR: 1800
+                ZAR: 1800,
+                GHS: 0,
+                TZS: 0,
+                UGX: 0
             },
             crypto: {
                 BTC: 0.001,
-                ETH: 0.01
-            }
+                ETH: 0.01,
+                USDT: 0,
+                USDC: 0,
+                BNB: 0,
+                SOL: 0,
+                XRP: 0,
+                ADA: 0
+            },
+            isEmailVerified: false,
+            isPhoneVerified: false
         });
 
         await user.save();
 
-        // Send welcome SMS
-        await twilio.sendSMS(
-            phone,
-            `🎉 Welcome to QuantumPay, ${firstName}! Your account is ready.`
-        );
-
-        // Generate token
+        // Generate JWT token
         const token = jwt.sign(
             { id: user._id },
-            process.env.JWT_SECRET,
+            process.env.JWT_SECRET || 'your-secret-key',
             { expiresIn: '7d' }
         );
+
+        // Return user data (without password)
+        const userData = user.toObject();
+        delete userData.password;
 
         res.status(201).json({
             status: 'success',
             token,
-            user: {
-                id: user._id,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                email: user.email,
-                phone: user.phone,
-                country: user.country
-            }
+            data: { user: userData }
         });
 
     } catch (error) {
         console.error('Registration error:', error);
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ 
+            status: 'error', 
+            message: error.message 
+        });
     }
 });
 
-// Login
+// ==================== LOGIN ====================
 router.post('/login', async (req, res) => {
     try {
         const { email, password } = req.body;
+
+        // Validate input
         if (!email || !password) {
             return res.status(400).json({ 
                 status: 'error', 
@@ -93,33 +117,38 @@ router.post('/login', async (req, res) => {
             });
         }
 
+        // Find user
         const user = await User.findOne({ email }).select('+password');
         if (!user) {
             return res.status(401).json({ 
                 status: 'error', 
-                message: 'Invalid credentials' 
+                message: 'Invalid email or password' 
             });
         }
 
-        const isValid = await user.correctPassword(password, user.password);
+        // Check password
+        const isValid = await bcrypt.compare(password, user.password);
         if (!isValid) {
             return res.status(401).json({ 
                 status: 'error', 
-                message: 'Invalid credentials' 
+                message: 'Invalid email or password' 
             });
         }
 
+        // Update last login
         user.lastLogin = new Date();
         await user.save();
 
+        // Generate token
         const token = jwt.sign(
             { id: user._id },
-            process.env.JWT_SECRET,
-            { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+            process.env.JWT_SECRET || 'your-secret-key',
+            { expiresIn: '7d' }
         );
+
+        // Return user data (without password)
         const userData = user.toObject();
         delete userData.password;
-        delete userData.__v;
 
         res.json({
             status: 'success',
@@ -131,125 +160,72 @@ router.post('/login', async (req, res) => {
         console.error('Login error:', error);
         res.status(500).json({ 
             status: 'error', 
-            message: process.env.NODE_ENV === 'production' 
-                ? 'Login failed' 
-                : error.message 
-        });
-    }
-});
-        // IMPORTANT: Match frontend expected format
-        res.json({
-            status: 'success',
-            token,
-            data: {
-                user: {
-                    id: user._id,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    email: user.email,
-                    phone: user.phone,
-                    country: user.country
-                }
-            }
-        });
-
-    } catch (error) {
-        console.error('Login error:', error);
-        res.status(500).json({ 
-            status: 'error', 
             message: error.message 
         });
     }
 });
 
-// Verify token
+// ==================== VERIFY TOKEN ====================
 router.get('/verify', async (req, res) => {
     try {
         const token = req.headers.authorization?.split(' ')[1];
         
         if (!token) {
-            return res.status(401).json({status: 'error', message: 'No token provided'});
+            return res.status(401).json({ 
+                status: 'error', 
+                message: 'No token provided' 
+            });
         }
 
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
         const user = await User.findById(decoded.id).select('-password');
 
         if (!user) {
-            return res.status(401).json({status: 'error', message: 'User not found' });
+            return res.status(401).json({ 
+                status: 'error', 
+                message: 'User not found' 
+            });
         }
 
         res.json({
             status: 'success',
-            user: {
-                id: user._id,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                email: user.email,
-                phone: user.phone,
-                country: user.country
-            }
+            data: { user }
         });
 
     } catch (error) {
         console.error('Verify error:', error);
-        res.status(401).json({status: 'error', message: 'Invalid tokes});
+        res.status(401).json({ 
+            status: 'error', 
+            message: 'Invalid token' 
+        });
     }
 });
 
-// Forgot password
+// ==================== FORGOT PASSWORD ====================
 router.post('/forgot-password', async (req, res) => {
     try {
         const { email } = req.body;
 
         const user = await User.findOne({ email });
         if (!user) {
-            return res.status(404).json({ error: 'User not found' });
+            return res.status(404).json({ 
+                status: 'error', 
+                message: 'User not found' 
+            });
         }
 
-        // Generate reset token
-        const resetToken = jwt.sign(
-            { id: user._id },
-            process.env.JWT_SECRET + user.password,
-            { expiresIn: '1h' }
-        );
-
-        // TODO: Send email with reset link
-        // await email.sendPasswordReset(user.email, resetToken);
-
-        res.json({
-            success: true,
-            message: 'Password reset email sent'
+        // In production, send email here
+        res.json({ 
+            status: 'success', 
+            message: 'Password reset link sent to your email' 
         });
 
     } catch (error) {
         console.error('Forgot password error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Reset password
-router.post('/reset-password', async (req, res) => {
-    try {
-        const { token, newPassword } = req.body;
-
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const user = await User.findById(decoded.id);
-
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        user.password = newPassword;
-        await user.save();
-
-        res.json({
-            success: true,
-            message: 'Password reset successful'
+        res.status(500).json({ 
+            status: 'error', 
+            message: error.message 
         });
-
-    } catch (error) {
-        console.error('Reset password error:', error);
-        res.status(500).json({ error: error.message });
     }
 });
 

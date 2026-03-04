@@ -1,152 +1,155 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
-const Transaction = require('../models/Transaction');
-const auth = require('../middleware/auth');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const Card = require('../models/Card');
+const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 
-// ==================== CREATE REAL VIRTUAL CARD ====================
-router.post('/create', auth, async (req, res) => {
+// ==================== AUTH MIDDLEWARE ====================
+const authenticate = async (req, res, next) => {
     try {
-        const { currency, limit } = req.body;
+        const token = req.headers.authorization?.split(' ')[1];
         
-        const user = await User.findById(req.userId);
+        if (!token) {
+            return res.status(401).json({ 
+                status: 'error', 
+                message: 'No token provided' 
+            });
+        }
+
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+        const user = await User.findById(decoded.id);
         
-        // Create REAL card via Stripe Issuing
-        const card = await stripe.issuing.cards.create({
-            currency: currency.toLowerCase(),
-            type: 'virtual',
-            status: 'active',
-            cardholder: await getOrCreateCardholder(user),
-            spending_controls: {
-                spending_limits: [{
-                    amount: limit * 100,
-                    interval: 'monthly',
-                    currency: currency.toLowerCase()
-                }]
-            }
-        });
-        
-        // Store card in database
-        user.cards.push({
-            cardId: card.id,
-            last4: card.last4,
-            brand: card.brand,
-            type: 'virtual',
-            limit,
-            currency,
-            expiryMonth: card.exp_month,
-            expiryYear: card.exp_year
-        });
-        
-        await user.save();
-        
-        res.json({
-            success: true,
-            card: {
-                id: card.id,
-                last4: card.last4,
-                brand: card.brand,
-                expiryMonth: card.exp_month,
-                expiryYear: card.exp_year,
-                limit
-            }
-        });
-        
+        if (!user) {
+            return res.status(401).json({ 
+                status: 'error', 
+                message: 'User not found' 
+            });
+        }
+
+        req.user = user;
+        req.userId = user._id;
+        next();
     } catch (error) {
-        console.error('Card creation error:', error);
-        res.status(500).json({ error: error.message });
+        console.error('Auth error:', error);
+        res.status(401).json({ 
+            status: 'error', 
+            message: 'Invalid token' 
+        });
+    }
+};
+
+// ==================== GET CARDS ====================
+router.get('/', authenticate, async (req, res) => {
+    try {
+        // Mock cards for now
+        const cards = req.user.cards || [
+            {
+                _id: '1',
+                cardNumber: '**** **** **** 4242',
+                cardHolderName: `${req.user.firstName} ${req.user.lastName}`.toUpperCase(),
+                expiryMonth: '12',
+                expiryYear: '25',
+                type: 'virtual',
+                brand: 'visa',
+                limit: 5000,
+                spent: 1234
+            }
+        ];
+
+        res.json({
+            status: 'success',
+            data: { cards }
+        });
+
+    } catch (error) {
+        console.error('Get cards error:', error);
+        res.status(500).json({ 
+            status: 'error', 
+            message: error.message 
+        });
     }
 });
 
-// Helper function to get or create Stripe cardholder
-async function getOrCreateCardholder(user) {
-    // Check if cardholder exists
-    if (user.stripeCardholderId) {
-        return user.stripeCardholderId;
-    }
-    
-    // Create new cardholder
-    const cardholder = await stripe.issuing.cardholders.create({
-        type: 'individual',
-        name: `${user.firstName} ${user.lastName}`,
-        email: user.email,
-        phone_number: user.phone,
-        billing: {
-            address: {
-                line1: '123 Main St', // Get from user profile
-                city: 'Nairobi',
-                country: 'KE'
-            }
-        }
-    });
-    
-    user.stripeCardholderId = cardholder.id;
-    await user.save();
-    
-    return cardholder.id;
-}
+// ==================== CREATE CARD ====================
+router.post('/create', authenticate, async (req, res) => {
+    try {
+        const { type, accountId } = req.body;
 
-// ==================== GET REAL CARD TRANSACTIONS ====================
-router.get('/transactions/:cardId', auth, async (req, res) => {
+        // Generate card details
+        const cardNumber = '4' + Math.random().toString().slice(2, 15).padEnd(15, '0');
+        const last4 = cardNumber.slice(-4);
+        const expiryMonth = ('0' + (new Date().getMonth() + 1)).slice(-2);
+        const expiryYear = (new Date().getFullYear() + 3).toString().slice(-2);
+        
+        const card = {
+            _id: uuidv4(),
+            cardId: 'card_' + uuidv4(),
+            last4,
+            brand: 'visa',
+            type: type || 'virtual',
+            limit: type === 'virtual' ? 5000 : 10000,
+            currency: 'USD',
+            spent: 0,
+            expiryMonth,
+            expiryYear,
+            status: 'active',
+            cardHolderName: `${req.user.firstName} ${req.user.lastName}`.toUpperCase()
+        };
+
+        // Save to user's cards
+        if (!req.user.cards) req.user.cards = [];
+        req.user.cards.push(card);
+        await req.user.save();
+
+        res.json({
+            status: 'success',
+            data: { 
+                card: {
+                    ...card,
+                    cardNumber: `**** **** **** ${last4}`
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Create card error:', error);
+        res.status(500).json({ 
+            status: 'error', 
+            message: error.message 
+        });
+    }
+});
+
+// ==================== FREEZE CARD ====================
+router.post('/:cardId/freeze', authenticate, async (req, res) => {
     try {
         const { cardId } = req.params;
         
-        // Get REAL transactions from Stripe
-        const transactions = await stripe.issuing.transactions.list({
-            card: cardId,
-            limit: 100
-        });
-        
-        res.json({
-            success: true,
-            transactions: transactions.data.map(t => ({
-                id: t.id,
-                amount: t.amount / 100,
-                currency: t.currency,
-                merchant: t.merchant_data.name,
-                category: t.merchant_data.category,
-                status: t.status,
-                date: new Date(t.created * 1000)
-            }))
-        });
-        
-    } catch (error) {
-        console.error('Card transactions error:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// ==================== FREEZE/UNFREEZE CARD ====================
-router.post('/:cardId/:action', auth, async (req, res) => {
-    try {
-        const { cardId, action } = req.params;
-        
-        const user = await User.findById(req.userId);
-        const card = user.cards.find(c => c.cardId === cardId);
+        const card = req.user.cards?.find(c => c._id === cardId || c.cardId === cardId);
         
         if (!card) {
-            return res.status(404).json({ error: 'Card not found' });
+            return res.status(404).json({ 
+                status: 'error', 
+                message: 'Card not found' 
+            });
         }
-        
-        // Update card status in Stripe
-        const updatedCard = await stripe.issuing.cards.update(cardId, {
-            status: action === 'freeze' ? 'inactive' : 'active'
-        });
-        
-        // Update local database
-        card.status = action === 'freeze' ? 'frozen' : 'active';
-        await user.save();
-        
+
+        card.status = card.status === 'active' ? 'frozen' : 'active';
+        await req.user.save();
+
         res.json({
-            success: true,
-            status: card.status
+            status: 'success',
+            message: `Card ${card.status === 'frozen' ? 'frozen' : 'unfrozen'} successfully`,
+            data: { card }
         });
-        
+
     } catch (error) {
-        console.error('Card action error:', error);
-        res.status(500).json({ error: error.message });
+        console.error('Freeze card error:', error);
+        res.status(500).json({ 
+            status: 'error', 
+            message: error.message 
+        });
     }
 });
 
