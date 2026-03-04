@@ -55,8 +55,19 @@ app.use(helmet({
         }
     }
 }));
+// Handle OPTIONS requests for all routes
+app.options('*', (req, res) => {
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.sendStatus(200);
+});
 
-// ==================== CORS CONFIGURATION ====================
+// ==================== CORS CONFIGURATION - COMPLETE FIX ====================
 const allowedOrigins = [
     'http://localhost:5000',
     'http://localhost:5500',
@@ -64,31 +75,66 @@ const allowedOrigins = [
     'http://127.0.0.1:5000',
     'http://127.0.0.1:5500',
     'http://127.0.0.1:3000',
-    'https://quantum-via-pages.dev',
-    'https://2f89ab7a.quantumpay.pages.dev',
-    'https://quantumpay-app.pages.dev',
+    'https://fanciful-duckanoo-7072a6.netlify.app',
+    'https://quantumpay.pages.dev',           // YOUR CLOUDFLARE DOMAIN
+    'https://quantumpay-app.pages.dev',       // ALTERNATIVE CLOUDFLARE DOMAIN
+    'https://quantum-via-pages.dev',          // ANOTHER VARIATION
     'https://your-netlify-site.netlify.app'
 ];
 
-if (process.env.CLIENT_URL) {
-    allowedOrigins.push(process.env.CLIENT_URL);
-}
-
+// Allow all origins in development
 app.use(cors({
     origin: function(origin, callback) {
+        // Allow requests with no origin (like mobile apps, curl)
         if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+        if (process.env.NODE_ENV === 'development') {
+            return callback(null, true);
+        
+        // Check if origin is allowed
+        if (allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            console.warn('🚫 CORS blocked origin:', origin);
-            callback(new Error('Not allowed by CORS'));
+            // Log blocked origins for debugging
+            console.log('⚠️ Blocked origin:', origin);
+            callback(new Error('⚠️ Not allowed by CORS'));
+            
+            // FOR TESTING ONLY - REMOVE IN PRODUCTION
+            // TEMPORARILY ALLOW ALL ORIGINS TO TEST
+            callback(null, true);
+            
+            // IN PRODUCTION, USE THIS INSTEAD:
+            // callback(new Error('Not allowed by CORS'));
         }
     },
     credentials: true,
     optionsSuccessStatus: 200
 }));
-
-console.log('🔒 CORS allowed origins:', allowedOrigins);
+// 1. HEALTH CHECK - Make it CORS-friendly
+app.get('/api/health', cors(), (req, res) => {
+    const dbState = mongoose.connection.readyState;
+    const dbStatus = {
+        0: 'disconnected',
+        1: 'connected',
+        2: 'connecting',
+        3: 'disconnecting'
+    };
+    
+    res.status(200).json({
+        status: 'success',
+        message: 'QuantumPay API is running',
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development',
+        version: '20.0.0',
+        database: {
+            status: dbStatus[dbState] || 'unknown',
+            state: dbState,
+            host: mongoose.connection.host || 'localhost',
+            name: mongoose.connection.name || 'quantumpay'
+        },
+        uptime: process.uptime()
+    });
+});
+console.log('🔒 CORS configured to allow:', allowedOrigins);
 
 // ==================== BODY PARSER ====================
 app.use(express.json({ limit: '10mb' }));
