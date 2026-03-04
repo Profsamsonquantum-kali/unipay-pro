@@ -152,5 +152,48 @@ router.post('/:cardId/freeze', authenticate, async (req, res) => {
         });
     }
 });
+// ==================== ORDER PHYSICAL CARD ====================
+router.post('/order-physical', authenticate, async (req, res) => {
+    try {
+        // Mock physical card order
+        const card = {
+            _id: uuidv4(),
+            cardId: 'card_' + uuidv4(),
+            last4: Math.floor(1000 + Math.random() * 9000).toString(),
+            brand: 'visa',
+            type: 'physical',
+            limit: 10000,
+            currency: 'USD',
+            spent: 0,
+            expiryMonth: ('0' + (new Date().getMonth() + 1)).slice(-2),
+            expiryYear: (new Date().getFullYear() + 3).toString().slice(-2),
+            status: 'active',
+            cardHolderName: `${req.user.firstName} ${req.user.lastName}`.toUpperCase()
+        };
+
+        // Save to user's cards
+        if (!req.user.cards) req.user.cards = [];
+        req.user.cards.push(card);
+        await req.user.save();
+
+        res.json({
+            status: 'success',
+            message: 'Physical card ordered successfully',
+            data: { 
+                card: {
+                    ...card,
+                    cardNumber: `**** **** **** ${card.last4}`
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Order physical card error:', error);
+        res.status(500).json({ 
+            status: 'error', 
+            message: error.message 
+        });
+    }
+});
 
 module.exports = router;
